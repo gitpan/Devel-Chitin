@@ -12,8 +12,6 @@ my %WriteMakefileArgs = (
   "ABSTRACT" => "Programmatic interface to the Perl debugging API",
   "AUTHOR" => "Anthony Brummett <brummett\@cpan.org>",
   "BUILD_REQUIRES" => {
-    "Devel::Chitin::CommonParent" => 0,
-    "Exporter" => 0,
     "File::Basename" => 0,
     "IO::Pipe" => 0,
     "Test::Builder" => 0,
@@ -29,8 +27,8 @@ my %WriteMakefileArgs = (
   "PREREQ_PM" => {
     "Carp" => 0,
     "Digest::MD5" => 0,
+    "Exporter" => 0,
     "IO::File" => 0,
-    "List::Util" => 0,
     "PadWalker" => 0,
     "Scalar::Util" => 0,
     "base" => 0,
@@ -38,7 +36,7 @@ my %WriteMakefileArgs = (
     "vars" => 0,
     "warnings" => 0
   },
-  "VERSION" => "0.01",
+  "VERSION" => "0.02",
   "test" => {
     "TESTS" => "t/*.t"
   }

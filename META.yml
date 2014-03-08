@@ -3,8 +3,6 @@ abstract: 'Programmatic interface to the Perl debugging API'
 author:
   - 'Anthony Brummett <brummett@cpan.org>'
 build_requires:
-  Devel::Chitin::CommonParent: 0
-  Exporter: 0
   File::Basename: 0
   IO::Pipe: 0
   Test::Builder: 0
@@ -21,8 +19,8 @@ name: Devel-Chitin
 requires:
   Carp: 0
   Digest::MD5: 0
+  Exporter: 0
   IO::File: 0
-  List::Util: 0
   PadWalker: 0
   Scalar::Util: 0
   base: 0
@@ -31,4 +29,4 @@ requires:
   warnings: 0
 resources:
   repository: https://github.com/amb43790/Devel-Chitin.git
-version: 0.01
+version: 0.02

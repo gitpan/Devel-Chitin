@@ -120,7 +120,7 @@ sub get_var_at_level {
 
     if (exists $h->{$varname}) {
         # it's a simple varname, padwalker found it
-        if (ref($h->{$varname}) eq 'SCALAR' or ref($h->{$varname}) eq 'REF') {
+        if (ref($h->{$varname}) eq 'SCALAR' or ref($h->{$varname}) eq 'REF' or ref($h->{$varname}) eq 'VSTRING') {
             return ${ $h->{$varname} };
         } else {
             return $h->{$varname};
@@ -130,7 +130,7 @@ sub get_var_at_level {
         # last chance, see if it's a package var
 
         if (my($sigil, $bare_varname) = ($varname =~ m/^([\$\@\%\*])(\w+)$/)) {
-            # a varname without a pacakge, try in the package at
+            # a varname without a package, try in the package at
             # that caller level
             my($package) = caller($level + $first_program_frame);
             $package ||= 'main';

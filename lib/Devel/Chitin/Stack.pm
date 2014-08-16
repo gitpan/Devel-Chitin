@@ -12,12 +12,20 @@ BEGIN {
 
 my @caller_values = qw(package filename line subroutine hasargs wantarray
                        evaltext is_require hints bitmask);
+
+# DB::DB will wipe this out between stoppages.
+our $stack_object;
+
+sub invalidate { undef($stack_object) }
+
 sub new {
     my $class = shift;
+    return $stack_object if $stack_object;
 
     my @frames;
-    my $should_remove_this_frame = 1;    # Don't include the frame for this function
+    my $in_debugger_frames = 1;
     my $next_AUTOLOAD_idx = 0;
+    my $serial_iter = _serial_iterator();
     my @prev_loc;
 
     my $level;
@@ -29,10 +37,6 @@ sub new {
         };
         last unless defined($caller{line});  # no more frames
 
-        # perl 5.10.* and earlier use 0 for scalar context.
-        # Normalize this value to the empty string for scalar context
-        $caller{wantarray} = '' if (defined($caller{wantarray}) and !$caller{wantarray});
-
         {
             my @this = @caller{'filename','line','package'};
             @caller{'filename','line','package'} = @prev_loc;
@@ -41,10 +45,10 @@ sub new {
 
         if ($caller{subroutine} eq 'DB::DB') {
             # entered the debugger here, start over recording frames
-            @frames = ();
-            $should_remove_this_frame = 0;
+            $in_debugger_frames = 0;
             next;
         }
+        next if $in_debugger_frames;
 
         #next if $skip;
 
@@ -63,6 +67,16 @@ sub new {
         # if it's a string eval, add info about what file and line the source string
         # came from
         @caller{'evalfile','evalline'} = ($caller{filename} || '')  =~ m/\(eval \d+\)\[(.*?):(\d+)\]/;
+
+        # perl 5.10.* and earlier use 0 for scalar context.
+        # Normalize this value to the empty string for scalar context
+        $caller{wantarray} = '' if (defined($caller{wantarray}) and !$caller{wantarray});
+
+        # Normalize hasargs.  eval-frames will always have 0.  Subroutines called with the
+        # &subname; syntax will have '' returned from caller() starting with perl 5.12.
+        $caller{hasargs} = '' if (! $caller{hasargs} and $caller{subroutine} ne '(eval)');
+
+        $caller{serial} = $serial_iter->(@caller{'subroutine','filename','line'});
 
         $caller{level} = $level;
 
@@ -87,10 +101,36 @@ sub new {
                     hasargs     => 1,
                     args        => \@saved_ARGV,
                     level       => $level,
+                    serial      => $Devel::Chitin::stack_serial[0]->[-1],
                 );
 
-    shift @frames if $should_remove_this_frame;
-    return bless \@frames, $class;
+    return $stack_object = bless \@frames, $class;
+}
+
+sub _serial_iterator {
+    my $next_idx = $#Devel::Chitin::stack_serial;
+
+    return sub {
+        my($subname, $filename, $line) = @_;
+
+        return unless @Devel::Chitin::stack_serial;
+
+        if (index($subname, '(eval') >= 0) {
+            my $this_sub_serial = $Devel::Chitin::stack_serial[$next_idx]->[1];
+            return $Devel::Chitin::eval_serial{$this_sub_serial}{$line} ||= DB::_allocate_sub_serial();
+        }
+
+        for (my $i = $next_idx; $i >= 0; $i--) {
+            if ($subname eq $Devel::Chitin::stack_serial[$i]->[0]
+                or
+                (index($subname, '__ANON__[') >= 0 and ref($Devel::Chitin::stack_serial[$i]->[0]) eq 'CODE')
+            ) {
+                $next_idx = $i - 1;
+                return $Devel::Chitin::stack_serial[$i]->[-1];
+            }
+        }
+        return DB::_allocate_sub_serial();  # Punt by making a new one up
+    };
 }
 
 sub depth {
@@ -144,7 +184,7 @@ BEGIN {
     no strict 'refs';
     foreach my $acc ( qw(package filename line subroutine hasargs wantarray
                          evaltext is_require hints bitmask
-                         subname autoload level evalfile evalline ) ) {
+                         subname autoload level evalfile evalline serial ) ) {
         *{$acc} = sub { return shift->{$acc} };
     }
 }
@@ -288,8 +328,9 @@ For an eval frame, subroutine will be "(eval)"
 
 =item hasargs
 
-True if this frame has its own instance of @_.  In practice, this will be false
-for eval frames, and for subroutines called as C<&subname;>, and true otherwise.
+True if this frame has its own instance of @_.  In practice, this will be 0
+for eval frames, empty string for subroutines called as C<&subname;>, and true
+otherwise.
 
 =item wantarray
 
@@ -342,6 +383,16 @@ The number indicating how deep this call frame actually is.  This number is
 not relative to the program being debugged, and so reflects the real number
 of frames between the caller and the bottom of the stack, including any
 frames within the debugger.
+
+=item serial
+
+Each instance of a subroutine call gets a unique identifier as an integer,
+including the initial frame for MAIN.
+
+eval frames also get serial numbers that are distinct between different
+function call frames.  eval frames within the same function call frame on the
+same line (such as inside a loop) will, unfortunately, have the same serial
+number.  This bug will hopefully be fixed in the future.
 
 =back
 

@@ -30,4 +30,4 @@ requires:
   warnings: '0'
 resources:
   repository: https://github.com/amb43790/Devel-Chitin.git
-version: '0.03'
+version: '0.04'

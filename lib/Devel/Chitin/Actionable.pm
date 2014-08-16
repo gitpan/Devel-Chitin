@@ -83,11 +83,6 @@ sub _insert {
     push @{$bp_info->{$type}}, $self;
 }
 
-sub _id {
-    my $self = shift;
-    md5(join('', @$self{'file', 'line', 'code'}, $self->type));
-}
-
 sub delete {
     my $self = shift;
 
@@ -137,9 +132,16 @@ sub delete {
  
 sub file    { return shift->{file} }
 sub line    { return shift->{line} }
-sub code    { return shift->{code} }
 sub once    { return shift->{once} }
 sub type    { my $class = shift;  $class = ref($class) || $class; die "$class didn't implement method type" }
+
+sub code    {
+    my $self = shift;
+    if (@_) {
+        $self->{code} = shift;
+    }
+    return $self->{code};
+}
 
 sub inactive {
     my $self = shift;
@@ -238,12 +240,16 @@ breakpoints for that file.  You may also filter by line, code and inactive.
 
 =item $bp->line
 
-=item $bp->code
-
 =item $bp->once
 
 Read-only accessors that return whatever values were used to create the
 breakpoint.
+
+=item $bp->code
+
+=item $bp->code($string)
+
+Mutator that retrieves the breakpoint's code condition, or sets it.
 
 =item $bp->inactive();
 
@@ -291,12 +297,16 @@ that file.  You may also filter by line, code and inactive.
 
 =item $act->line
 
-=item $act->code
-
 =item $act->once
 
 Read-only accessors that return whatever values were used to create the
 action.
+
+=item $act->code
+
+=item $act->code($string);
+
+Mutator that retrieves the action's code, or set it.
 
 =item $act->inactive();
 

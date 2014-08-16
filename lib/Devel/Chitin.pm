@@ -3,7 +3,7 @@ use strict;
 
 package Devel::Chitin;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Scalar::Util;
 use IO::File;
@@ -416,6 +416,7 @@ BEGIN {
 # We could re-throw the die if $^S is 1
 $SIG{__DIE__} = sub {
     if (defined($^S) && $^S == 0) {
+        $in_debugger = 1;
         my $exception = $_[0];
         # It's interesting to note that if we pass an arg to caller() to
         # find out the offending subroutine name, then the line reported
@@ -514,8 +515,20 @@ sub DB {
     }
     Devel::Chitin::_do_each_client('notify_resumed', $current_location);
     undef $current_location;
+    Devel::Chitin::Stack::invalidate();
     restore();
 }
+
+BEGIN {
+    my $sub_serial = 1;
+    @Devel::Chitin::stack_serial = ( [ 'main::MAIN', $sub_serial++ ] );
+    %Devel::Chitin::eval_serial = ();
+
+    sub _allocate_sub_serial {
+        $sub_serial++;
+    }
+}
+
 
 sub sub {
     no strict 'refs';
@@ -528,13 +541,26 @@ sub sub {
         unshift @AUTOLOAD_names, $caller_AUTOLOAD;
     }
     my $stack_tracker;
+    local @Devel::Chitin::stack_serial = @Devel::Chitin::stack_serial;
     unless ($in_debugger) {
-        my $tmp = $sub;
         $stack_depth++;
-        $stack_tracker = _new_stack_tracker($tmp);
+        $stack_tracker = _new_stack_tracker(_allocate_sub_serial());
+
+        push(@Devel::Chitin::stack_serial, [ $sub, $$stack_tracker]);
     }
 
-    return &$sub;
+    my @rv;
+    if (wantarray) {
+        @rv = &$sub;
+    } elsif (defined wantarray) {
+        $rv[0] = &$sub;
+    } else {
+        &$sub;
+    }
+
+    delete $Devel::Chitin::eval_serial{$$stack_tracker} if $stack_tracker;
+
+    return wantarray ? @rv : $rv[0];
 }
 
 sub _new_stack_tracker {
@@ -568,7 +594,6 @@ END {
     return if $debugger_disabled;
 
     $single=0;
-    $finished = 1;
     $in_debugger = 1;
 
     eval {
@@ -578,6 +603,7 @@ END {
             Devel::Chitin::_do_each_client('notify_program_exit');
         } else {
             Devel::Chitin::_do_each_client('notify_program_terminated', $?);
+            $finished = 1;
             # These two will trigger DB::DB and the event loop
             $in_debugger = 0;
             $single=1;

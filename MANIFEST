@@ -31,6 +31,7 @@ t/02-stepover.t
 t/03-continue-end.t
 t/04-breakpoint-once.t
 t/04-breakpoint.t
+t/04-change-breakpoint-code.t
 t/04-conditional-breakpoint.t
 t/04-delete-breakpoint.t
 t/05-location.t
@@ -42,6 +43,7 @@ t/10-loaded_files.t
 t/11-postponed.t
 t/12-eval.t
 t/13-fork.t
+t/14-step-in-uncaught-exception.t
 t/14-uncaught-exception.t
 t/15-subroutine-location.t
 t/16-user-requested-exit.t

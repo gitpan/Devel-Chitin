@@ -6,25 +6,31 @@ use lib 'lib';
 use lib 't/lib';
 use Devel::Chitin::TestRunner;
 
+our($serial_1, $serial_2, $serial_3, $serial_4, $serial_5); my $main_serial = $Devel::Chitin::stack_serial[0]->[-1];
 run_test(
-    57,
+    60,
     sub {
-        foo(1,2,3);                 # line 12: void
+        $serial_1 = $Devel::Chitin::stack_serial[-1]->[-1];
+        foo(1,2,3);                 # line 14: void
         sub foo {
-            my @a = Bar::bar();     # line 14: list
+            $serial_2 = $Devel::Chitin::stack_serial[-1]->[-1];
+            my @a = Bar::bar();     # line 17: list
         }
         sub Bar::bar {
-            &Bar::baz;              # line 17: list
+            $serial_3 = $Devel::Chitin::stack_serial[-1]->[-1];
+            &Bar::baz;              # line 21: list
         } 
         package Bar;
         sub baz {
-            my $a = eval {          # line 21: scalar
-                eval "quux()";      # line 22: scalar
-            }
+            $serial_4 = $Devel::Chitin::stack_serial[-1]->[-1];
+            my $a = eval {          # line 26: scalar
+                eval "quux()";      # line 27: scalar
+            };
         }
         sub AUTOLOAD {
+            $serial_5 = $Devel::Chitin::stack_serial[-1]->[-1];
             $DB::single=1;
-            27;                     # scalar
+            33;                     # scalar
         }
     },
     \&check_stack,
@@ -41,7 +47,7 @@ sub check_stack {
     my @expected = (
         {   package     => 'Bar',
             filename    => $filename,
-            line        => 27,
+            line        => 33,
             subroutine  => 'Bar::AUTOLOAD',
             hasargs     => 1,
             wantarray   => '',
@@ -52,24 +58,26 @@ sub check_stack {
             autoload    => 'quux',
             subname     => 'AUTOLOAD',
             args        => [],
+            serial      => $serial_5,
         },
         {   package     => 'Bar',
-            filename    => qr/\(eval \d+\)\[$filename:22\]/,
+            filename    => qr/\(eval \d+\)\[$filename:27\]/,
             line        => 1,   # line 1 if the eval text
             subroutine  => '(eval)',
             hasargs     => 0,
             wantarray   => '',
             evaltext    => $^V lt v5.18 ? "quux()\n;" : 'quux()',
             evalfile    => $filename,
-            evalline    => 22,
+            evalline    => 27,
             is_require  => '',  # false but not undef because it is a string eval
             autoload    => undef,
             subname     => '(eval)',
             args        => [],
+            serial      => '__DONT_CARE__',  # we'll check eval frame IDs in serials_are_distinct()
         },
         {   package     => 'Bar',
             filename    => $filename,
-            line        => 22,
+            line        => 27,
             subroutine  => '(eval)',
             hasargs     => 0,
             wantarray   => '',
@@ -80,12 +88,13 @@ sub check_stack {
             autoload    => undef,
             subname     => '(eval)',
             args        => [],
+            serial      => '__DONT_CARE__', # we'll check eval frame IDs in serials_are_distinct()
         },
         {   package     => 'Bar',
             filename    => $filename,
-            line        => 21,   
+            line        => 26,
             subroutine  => 'Bar::baz',
-            hasargs     => $^V lt v5.12 ? 0 : '', # because it's called as &Bar::baz;
+            hasargs     => '', # because it's called as &Bar::baz;
             wantarray   => 1,
             evaltext    => undef,
             evalfile    => undef,
@@ -94,10 +103,11 @@ sub check_stack {
             autoload    => undef,
             subname     => 'baz',
             args        => [],
+            serial      => $serial_4,
         },
         {   package     => 'main',
             filename    => $filename,
-            line        => 17,
+            line        => 21,
             subroutine  => 'Bar::bar',
             hasargs     => 1,
             wantarray   => 1,
@@ -108,10 +118,11 @@ sub check_stack {
             autoload    => undef,
             subname     => 'bar',
             args        => [],
+            serial      => $serial_3,
         },
         {   package     => 'main',
             filename    => $filename,
-            line        => 14,
+            line        => 17,
             subroutine  => 'main::foo',
             hasargs     => 1,
             wantarray   => undef,
@@ -122,12 +133,13 @@ sub check_stack {
             autoload    => undef,
             subname     => 'foo',
             args        => [1,2,3],
+            serial      => $serial_2,
         },
         # two frames inside run_test
         {   package     => 'main',
             filename    => $filename,
-            line        => 12,
-            subroutine  => "main::__ANON__[$filename:29]",
+            line        => 14,
+            subroutine  => "main::__ANON__[$filename:35]",
             hasargs     => 1,
             wantarray   => undef,
             evaltext    => undef,
@@ -137,6 +149,7 @@ sub check_stack {
             autoload    => undef,
             subname     => '__ANON__',
             args        => [],
+            serial      => $serial_1,
         },
         {   package =>  'Devel::Chitin::TestRunner',
             filename    => qr(t/lib/Devel/Chitin/TestRunner\.pm$),
@@ -151,11 +164,12 @@ sub check_stack {
             autoload    => undef,
             subname     => 'run_test',
             args        => '__DONT_CARE__',
+            serial      => '__DONT_CARE__',
         },
  
         {   package     => 'main',
             filename    => $filename,
-            line        => 30,
+            line        => 36,
             subroutine  => 'main::MAIN',
             hasargs     => 1,
             wantarray   => undef,
@@ -166,20 +180,37 @@ sub check_stack {
             autoload    => undef,
             subname     => 'MAIN',
             args        => ['--test'],
+            serial      => $main_serial,
         },
     );
 
     Test::More::is($stack->depth, scalar(@expected), 'Expected number of stack frames');
 
+    my @serial;
     for(my $framenum = 0; my $frame = $stack->frame($framenum); $framenum++) {
         check_frame($frame, $expected[$framenum]);
+        push @serial, [$framenum, $frame->serial];
     }
+    serials_are_distinct(\@serial);
 
     my $iter = $stack->iterator();
     Test::More::ok($iter, 'Stack iterator');
+    my @iter_serial;
     for(my $framenum = 0; my $frame = $iter->(); $framenum++) {
         check_frame($frame, $expected[$framenum], 'iterator');
+        push @iter_serial, [$framenum, $frame->serial];
+
     }
+    Test::More::is_deeply(\@iter_serial, \@serial, 'Got the same serial numbers');
+
+    # Get the stack again, serials should be the same
+    Devel::Chitin::Stack::invalidate();  # force it to re-create it
+    my $stack2 = $db->stack();
+    my @serial2;
+    for (my $framenum = 0; my $frame = $stack2->frame($framenum); $framenum++) {
+        push @serial2, [ $framenum, $frame->serial];
+    }
+    Test::More::is_deeply(\@serial2, \@serial, 'serial numbers are the same getting another stack object');
 }
 
 sub check_frame {
@@ -214,8 +245,25 @@ sub check_frame {
                         "Execution stack frame filename matches: $msg");
     }
 
-        
     Test::More::is_deeply(\%got_copy, \%expected_copy, "Execution stack frame matches for $msg");
+}
+
+sub serials_are_distinct {
+    my $serial_records = shift;
+
+    my %serial_counts;
+    my %serial_to_frame;
+    foreach my $record ( @$serial_records ) {
+        my($frameno, $serial) = @$record;
+        $serial_counts{ $serial }++;
+
+        $serial_to_frame{$serial} ||= [];
+        push @{$serial_to_frame{ $serial } }, $frameno
+    }
+
+    my @duplicate_serials = grep { $serial_counts{$_} > 1 } keys %serial_counts;
+    Test::More::ok(! @duplicate_serials, 'serials are distinct')
+        or Test::More::diag('Frames with duplicates: ', join(' and ', map { join(',', @{$serial_to_frame{$_}}) } @duplicate_serials));
 }
 
 sub remove_dont_care {

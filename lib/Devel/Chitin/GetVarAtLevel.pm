@@ -126,25 +126,35 @@ sub get_var_at_level {
             return $h->{$varname};
         }
 
-    } else {
-        # last chance, see if it's a package var
+    } elsif (my($sigil, $bare_varname) = ($varname =~ m/^([\$\@\%\*])(\w+)$/)) {
+        # a varname without a package, try in the package at
+        # that caller level
+        my($package) = caller($level + $first_program_frame);
+        $package ||= 'main';
 
-        if (my($sigil, $bare_varname) = ($varname =~ m/^([\$\@\%\*])(\w+)$/)) {
-            # a varname without a package, try in the package at
-            # that caller level
-            my($package) = caller($level + $first_program_frame);
-            $package ||= 'main';
+        my $expanded_varname = $sigil . $package . '::' . $bare_varname;
+        my @value = eval( $expanded_varname );
+        return _context_return($sigil, \@value);
 
-            my $expanded_varname = $sigil . $package . '::' . $bare_varname;
-            my @value = eval( $expanded_varname );
-            return @value < 2 ? $value[0] : \@value;
-
-        } elsif ($varname =~ m/^[\$\@\%\*]\w+(::\w+)*(::)?$/) {
-            my @value = eval($varname);
-            return @value < 2 ? $value[0] : \@value;
-        }
+    } elsif ($varname =~ m/^([\$\@\%\*])\w+(::\w+)*(::)?$/) {
+        # a varname with a package
+        my $sigil = $1;
+        my @value = eval($varname);
+        return _context_return($sigil, \@value);
     }
 
+}
+
+sub _context_return {
+    my($sigil, $list) = @_;
+    if (@$list < 2) {
+        return $list->[0];
+    } elsif ($sigil eq '%') {
+        my %hash = @$list;
+        return \%hash;
+    } else {
+        return $list;
+    }
 }
 
 # How many frames between here and the program, both for PadWalker (which

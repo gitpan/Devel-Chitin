@@ -3,7 +3,7 @@ use strict;
 
 package Devel::Chitin;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use Scalar::Util;
 use IO::File;
@@ -25,6 +25,9 @@ my(%attached_clients,
    $is_initialized,
    @pending_eval,
    $current_location,
+   $previous_location,
+   @new_watch_exprs,
+   @watch_exprs,
 );
 sub attach {
     my $self = shift;
@@ -40,11 +43,15 @@ sub attach {
     return $self;
 }
 
+sub _turn_off_trace_if_not_needed {
+    $DB::trace = %trace_clients || @watch_exprs;
+}
+
 sub detach {
     my $self = shift;
     my $deleted = delete $attached_clients{$self};
     delete $trace_clients{$self};
-    $DB::trace = %trace_clients ? 1 : 0;
+    _turn_off_trace_if_not_needed();
     if ($deleted) {
         for (my $i = 0; $i < @attached_clients; $i++) {
             my $same = ref($self)
@@ -102,10 +109,7 @@ sub trace {
         } else {
             # turning it off
             delete $trace_clients{$class};
-            if (%trace_clients) {
-                # No more clients requesting trace
-                $DB::trace = 0;
-            }
+            _turn_off_trace_if_not_needed();
             $rv = 0;
         }
 
@@ -157,6 +161,34 @@ sub is_loaded {
 sub loaded_files {
     my @files = grep /^_</, keys(%main::);
     return map { substr($_,2) } @files; # remove the <_
+}
+
+sub add_watchexpr {
+    my($class, $expr) = @_;
+    $DB::trace = 1;
+    push @new_watch_exprs, { expr => $expr, client => $class, value => undef };
+}
+
+sub remove_watchexpr {
+    my($class, $expr) = @_;
+    my $deleted;
+
+    SEARCH:
+    foreach my $store ( \@watch_exprs, \@new_watch_exprs) {
+        for (my $i = 0; $i < @$store; $i++) {
+            if ($store->[$i]->{client} eq $class
+                and
+                $store->[$i]->{expr} eq $expr
+            ) {
+                $deleted = splice(@$store, $i, 1);
+                last SEARCH;
+            }
+        }
+    }
+
+    _turn_off_trace_if_not_needed();
+
+    return $deleted;
 }
 
 sub is_breakable {
@@ -275,6 +307,7 @@ sub notify_fork_child {}
 sub notify_program_terminated {}
 sub notify_program_exit {}
 sub notify_uncaught_exception {}
+sub notify_watch_expr {}
 
 sub _do_each_client {
     my($method, @args) = @_;
@@ -339,6 +372,32 @@ sub save {
 
 sub restore {
     ( $@, $!, $^E, $,, $/, $\, $^W ) = @saved;
+}
+
+sub _evaluate_watch_exprs {
+    EXPR:
+    foreach my $details ( @watch_exprs ) {
+        my($current_value) = _eval_in_program_context($details->{expr}, 1);
+        my $old_value = $details->{value};
+
+        if (@$current_value != @$old_value) {
+            $details->{client}->notify_watch_expr($previous_location, $details->{expr}, $old_value, $current_value);
+            $details->{value} = $current_value;
+            next EXPR;
+        }
+
+        for (my $i = 0; $i < @$current_value; $i++) {
+            no warnings 'uninitialized';
+            if ((defined($current_value->[$i]) xor defined($old_value->[$i]))
+                or
+                $current_value->[$i] ne $old_value->[$i]
+            ) {
+                $details->{client}->notify_watch_expr($previous_location, $details->{expr}, $old_value, $current_value);
+                $details->{value} = $current_value;
+                next EXPR;
+            }
+        }
+    }
 }
 
 sub is_breakpoint {
@@ -453,6 +512,15 @@ sub _execute_actions {
     }
 }
 
+sub fill_in_values_for_new_watch_exprs {
+    foreach my $detail ( @new_watch_exprs ) {
+        my($value) = _eval_in_program_context($detail->{expr}, 1);
+        $detail->{value} = $value;
+        push @watch_exprs, $detail;
+    }
+    @new_watch_exprs = ();
+}
+
 sub DB {
     return if (!$ready or $debugger_disabled or $in_debugger);
 
@@ -488,10 +556,12 @@ sub DB {
 
     _execute_actions($filename, $line);
 
-    return if $no_stopping;
+    goto RETURN_TO_DEBUGGED_PROGRAM if $no_stopping;
+
+    _evaluate_watch_exprs();
 
     if (! is_breakpoint($package, $filename, $line)) {
-        return;
+        goto RETURN_TO_DEBUGGED_PROGRAM;
     }
     $step_over_depth = undef;
 
@@ -513,7 +583,14 @@ sub DB {
 
         redo if ($finished || @pending_eval);
     }
+
+    fill_in_values_for_new_watch_exprs();
+
     Devel::Chitin::_do_each_client('notify_resumed', $current_location);
+
+    RETURN_TO_DEBUGGED_PROGRAM:
+
+    $previous_location = $current_location;
     undef $current_location;
     Devel::Chitin::Stack::invalidate();
     restore();
@@ -650,6 +727,8 @@ Devel::Chitin - Programmatic interface to the Perl debugging API
   CLIENT->is_breakable($file, $line);   # Return true if the line is executable
   CLIENT->stack();              # Return Devel::Chitin::Stack
   CLIENT->current_location();   # Where is the program stopped at?
+  CLIENT->add_watchexpr($expr); # Add a new watch expression
+  CLIENT->remove_watchexpr($expr);  # Remove a watch expression
 
   # These methods are called by the debugging system at the appropriate time.
   # Base-class methods do nothing.  These methods must not block.
@@ -664,6 +743,8 @@ Devel::Chitin - Programmatic interface to the Perl debugging API
   CLIENT->notify_program_terminated($?);    # Called as the program is finishing 
   CLIENT->notify_program_exit();            # Called as the program is exiting
   CLIENT->notify_uncaught_exception($exc);  # Called after an uncaught exception
+  CLIENT->notify_watch_expr($location, $expr, $old, $new);
+                                        # Called when a watch expr changes
 
 =head1 DESCRIPTION
 
@@ -837,6 +918,29 @@ Return a list of strings containing the source code for a loaded file.
 See L<Devel::Chitin::Actionable> for documentation on setting breakpoints
 and actions.
 
+=head2 Watch expressions
+
+Watch expressions are evaluated before each statement in the program.  If a
+watched expression's value ever changes, the client that added the expression
+will be notified via its C<notify_watch_expr()> method.  These expressions
+are always evaluated in list context.  They are considered changed if the
+list's length changes, or if one of the elements has a different value
+when compared as strings.  This comparison is only a shallow; it will not
+recurse deeply into references.
+
+=over 4
+
+=item CLIENT->add_watch_expr($expression)
+
+Adds a new watch expression linked to the calling client.
+
+=item CLIENT->remove_watch_expr($expression)
+
+Remove a previously added watch expression.  Returns false if the expression
+was not previously added with C<add_watch_expr()>.
+
+=back
+
 =head2 CLIENT METHODS
 
 These methods exist in the base class, but only as empty stubs.  They are
@@ -923,6 +1027,19 @@ The debugger system installs a __DIE__ handler to trap exceptions that are
 not otherwise handled by the debugged program.  When an uncaught exception
 occurs, this method is called.  $exception is an instance of
 L<Devel::Chitin::Exception>.
+
+=item CLIENT->notify_watch_expr($location, $expr, $old, $new);
+
+Called when a client has added a watchexpr expression and its value has
+changed.  Since watch expressions are evaluated in list context, $old and
+$new are listrefs containing the previous and new values.
+
+The location reported is whichever program line was executing immediately
+prior to the current line.
+
+Note that this does not stop execution of the debugged program.  The
+notify_watch_expr() method should call C<CLIENT-E<gt>step> to trigger a
+breakpoint.
 
 =back
 
